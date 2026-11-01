@@ -1,3 +1,5 @@
+import tkinter as tk
+
 class Cliente ():
 
     def __init__(self):
@@ -9,3 +11,11 @@ class Cliente ():
           pass
     def direccion ():
           pass
+
+def ventana ():
+      clientes = tk.Tk()
+      clientes.title("Clientes")
+      clientes.geometry("800x600")
+      clientes.mainloop()
+
+ventana()
