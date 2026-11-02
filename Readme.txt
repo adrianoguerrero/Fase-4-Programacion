@@ -10,6 +10,7 @@ Sección clientes
     validar que el campo no este vacio
     validar la longitud que al menos tenga dos espacios (con el fin de saber que ingreso minimo un nombre y dos apellidos)
     cada seccion de texto separado por espacio debe tener minimo dos letras sin numeros ni caracteres especiales
+
 Sección sevicios
   servicio 1
   servicio 2
