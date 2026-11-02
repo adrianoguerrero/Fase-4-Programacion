@@ -1,6 +1,6 @@
 # Fase-4-Programacion
 
-inicialmente se creo el archivo Sotfware_FJ.py el cual esta disponible para editar entre todos.
+Inicialmente se creo el archivo Sotfware_FJ.py el cual esta disponible para editar entre todos.
 Propongo realizar una estructura inicial.
 
 El desarrollo puede cumplir con las siguientes etapas:
