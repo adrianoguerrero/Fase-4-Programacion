@@ -1,0 +1,123 @@
+import contextlib
+from decimal import Decimal
+import io
+from pathlib import Path
+import tempfile
+import unittest
+
+from demostracion import ejecutar_demo
+from nucleo_sistema import (
+    AlquilerLuces, AlquilerPantallas, AlquilerSalon, AlquilerSonido, Cliente,
+    DatoInvalidoError, RegistroLogs, ReservaError, ServicioNoDisponibleError,
+    SesionFotografica, Sistema, TransporteColectivo,
+)
+from Sotfware_FJ import crear_servicio
+
+
+class PruebasSistema(unittest.TestCase):
+    def setUp(self):
+        self.temporal = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporal.cleanup)
+        self.log = Path(self.temporal.name) / "eventos.log"
+        self.sistema = Sistema(RegistroLogs(self.log))
+
+    def test_clientes_validacion_edicion_atomica_y_eliminacion(self):
+        s = self.sistema
+        cliente = s.registrar_cliente("C1", "Ana", "123", "Calle 1")
+        s.registrar_cliente("C2", "Luis", "456", "Calle 2")
+        for datos in [("C3", "", "789", "Calle"), ("C3", "Ana", "abc", "Calle"),
+                      ("C3", "Ana", "123", "Calle"), (" C1 ", "Ana", "789", "Calle")]:
+            with self.subTest(datos=datos), self.assertRaises(DatoInvalidoError):
+                s.registrar_cliente(*datos)
+        with self.assertRaises(DatoInvalidoError):
+            s.editar_cliente("C1", "Otro", "456", "Nueva")
+        self.assertEqual((cliente.nombre, cliente.documento, cliente.direccion), ("Ana", "123", "Calle 1"))
+        s.editar_cliente("C1", "Ana María", "123", "Nueva")
+        self.assertEqual(cliente.nombre, "Ana María")
+        s.eliminar_cliente("C2")
+        self.assertEqual(len(s.clientes), 1)
+
+    def test_costos_polimorficos_y_total_opcional(self):
+        servicios = [
+            (AlquilerSonido("1", 100, 2), "200.00"),
+            (AlquilerPantallas("2", 100, 3), "300.00"),
+            (AlquilerLuces("3", 100, "estandar"), "150.00"),
+            (TransporteColectivo("4", 10, 3, 5), "150.00"),
+            (AlquilerSalon("5", 10, 25), "250.00"),
+            (SesionFotografica("6", 100, "premium"), "200.00"),
+        ]
+        for servicio, costo in servicios:
+            with self.subTest(servicio=servicio.get_nombre()):
+                self.assertEqual(servicio.calcular_costo(), Decimal(costo))
+                self.assertTrue(servicio.describir())
+        self.assertEqual(servicios[0][0].calcular_total_con_impuesto(), Decimal("238.00"))
+        self.assertEqual(servicios[0][0].calcular_total_con_impuesto(0, 50), Decimal("150.00"))
+
+    def test_parametros_invalidos_y_excepcion_encadenada(self):
+        for constructor in (
+            lambda: AlquilerSonido("S", "abc", 1),
+            lambda: AlquilerSonido("S", "NaN", 1),
+            lambda: AlquilerPantallas("S", 1, 1.5),
+            lambda: AlquilerLuces("S", 1, "oro"),
+            lambda: TransporteColectivo("S", 1, 0, 2),
+            lambda: AlquilerSalon("S", 1, -2),
+            lambda: SesionFotografica("S", 1, ""),
+            lambda: crear_servicio("inexistente", "S", 1, 1),
+        ):
+            with self.subTest(constructor=constructor), self.assertRaises(DatoInvalidoError):
+                constructor()
+        with self.assertRaises(DatoInvalidoError) as error:
+            AlquilerSonido("S", "abc", 1)
+        self.assertIsNotNone(error.exception.__cause__)
+
+    def test_reservas_facturacion_y_disponibilidad(self):
+        s = self.sistema
+        s.registrar_cliente("C1", "Ana", "123", "Calle")
+        s.registrar_cliente("C2", "Luis", "456", "Calle")
+        sonido = AlquilerSonido("S1", 100, 2)
+        s.agregar_servicio(sonido)
+        s.agregar_servicio(AlquilerPantallas("S2", 50, 2))
+        with self.assertRaises(ReservaError):
+            s.crear_reserva("R0", "C1", "S1", 3)
+        r1 = s.crear_reserva("R1", "C1", "S1", 2)
+        with self.assertRaises(ServicioNoDisponibleError):
+            s.crear_reserva("R2", "C2", "S1", 2)
+        self.assertEqual(len(s.reservas), 1)
+        r2 = s.crear_reserva("R2", "C1", "S2", 2)
+        with self.assertRaises(DatoInvalidoError):
+            s.facturar("C1", descuento=301)
+        self.assertEqual(r1.estado, "confirmada")
+        self.assertEqual(r2.estado, "confirmada")
+        factura = s.facturar("C1", iva="0.19", descuento=10)
+        self.assertEqual((factura.subtotal, factura.impuesto, factura.total),
+                         (Decimal("300.00"), Decimal("55.10"), Decimal("345.10")))
+        self.assertEqual(r1.estado, "procesada")
+        self.assertTrue(sonido.esta_disponible())
+        with self.assertRaises(ReservaError):
+            s.facturar("C1")
+        with self.assertRaises(ReservaError):
+            s.cancelar_reserva("R1")
+        with self.assertRaises(ReservaError):
+            s.eliminar_cliente("C1")
+        nueva = s.crear_reserva("R3", "C2", "S1", 2)
+        s.cancelar_reserva("R3")
+        self.assertEqual(nueva.estado, "cancelada")
+        self.assertTrue(sonido.esta_disponible())
+        s.editar_cliente("C1", "Nuevo", "123", "Calle")
+        self.assertEqual(factura.nombre, "Ana")
+
+    def test_demo_registra_errores_y_continua(self):
+        salida = io.StringIO()
+        with contextlib.redirect_stdout(salida):
+            ejecutar_demo(self.sistema)
+        self.assertIn("24. Nueva reserva tras facturar: OK", salida.getvalue())
+        self.assertIn("ERROR CONTROLADO", salida.getvalue())
+        registro = self.log.read_text(encoding="utf-8")
+        self.assertIn("[ERROR]", registro)
+        self.assertIn("Demostración finalizada", registro)
+        self.assertEqual(len(self.sistema.facturas), 1)
+        self.assertEqual(self.sistema.buscar_reserva("R4").estado, "confirmada")
+
+
+if __name__ == "__main__":
+    unittest.main()
